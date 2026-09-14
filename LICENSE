@@ -19,20 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-===============================================================================
-第三方素材与参考（Third-party notices）
-===============================================================================
-
-本包的代码以 MIT 授权（上）。但它**内嵌了第三方的美术素材**，那部分不是我的：
-
-  · Q 版鲸鱼娘形象（assets/preview/*.png 与内嵌进 lib/client.js 的三张姿态 PNG）
-      来源：yanzwzz/dsh-whale-girl-pet（MIT License，
-            Copyright (c) 2026 dsh-whale-girl-pet contributors）
-      加工：由 星河野望 从该项目的 preview-{idle,work,done}.gif 首帧抠图并缩放
-
-  · 弹簧/阻尼/重力等物理量的取值基准参考自社区插件 dsh-think-bounce-pet
-      （作者 9livewolf，其 package.json 声明 MIT）—— 只借公式与常数，未复制代码
-
-上游的 MIT 版权声明与许可全文完整保留，见同目录 **NOTICE.md**（含上游 LICENSE 原文）。
-如果你要再分发本包，请把 LICENSE 与 NOTICE.md 一起带上。

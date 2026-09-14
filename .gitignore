@@ -1,0 +1,12 @@
+# 开发垃圾
+node_modules/
+.npm-cache/
+*.tgz
+
+# 构建回滚点（每台机器自己生成，不进仓库）
+lib/client.js.prev
+
+# 本地临时
+*.log
+.DS_Store
+Thumbs.db
