@@ -1,0 +1,58 @@
+{
+  "poses": {
+    "idle": {
+      "asset": "keyed-idle.png",
+      "label": "平时",
+      "sha256_16": "3baa8e9c92fa36d0",
+      "w": 144,
+      "h": 180,
+      "ax": 72,
+      "ay": 10,
+      "cx": 0,
+      "cy": 80,
+      "ch": 177,
+      "box": {
+        "minX": 2,
+        "minY": 2,
+        "maxX": 142,
+        "maxY": 178
+      }
+    },
+    "work": {
+      "asset": "keyed-work.png",
+      "label": "在忙",
+      "sha256_16": "34e36eacb5ecf6c4",
+      "w": 159,
+      "h": 180,
+      "ax": 80,
+      "ay": 9,
+      "cx": -0.5,
+      "cy": 81,
+      "ch": 177,
+      "box": {
+        "minX": 2,
+        "minY": 2,
+        "maxX": 157,
+        "maxY": 178
+      }
+    },
+    "done": {
+      "asset": "keyed-done.png",
+      "label": "干完了",
+      "sha256_16": "0afe182c76a233ae",
+      "w": 160,
+      "h": 180,
+      "ax": 80,
+      "ay": 9,
+      "cx": 0,
+      "cy": 81,
+      "ch": 177,
+      "box": {
+        "minX": 2,
+        "minY": 2,
+        "maxX": 158,
+        "maxY": 178
+      }
+    }
+  }
+}

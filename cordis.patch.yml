@@ -1,0 +1,11 @@
+# dsh-whale-rod-cursor bundle patch：一行宿主条目，承载这个双面插件。
+#
+# 宿主 Loader 激活 node 半边（lib/index.js，空壳）；
+# dsh-client-modules 会扫描同一条目的 package.json `dsh.client` 声明，
+# 据此组装浏览器半边（lib/client.js）。
+#
+# 想关掉这个插件：把下面这行改成 `- id: rod-cursor` + `  disabled: true`，
+# 或直接在 DSH 设置 → 插件里禁用。
+- insert:
+    - id: rod-cursor
+      name: dsh-whale-rod-cursor
