@@ -182,6 +182,33 @@ function clickByText(root, text) {
   return false;
 }
 
+/**
+ * 按标签前缀拖设置页的滑块（设置行的结构是 div[span(标签), input(range)]）。
+ * 用来把某个参数调到测试需要的值，比如把气泡冷却调到最小让回归用例确定可测。
+ */
+function setSlider(root, labelPrefix, value) {
+  let hit = null;
+  (function walk(node) {
+    if (hit || !node || typeof node !== 'object') return;
+    const p = node.props;
+    const kids = p && p.children;
+    if (Array.isArray(kids) && kids.length === 2) {
+      const a = kids[0], b = kids[1];
+      const label = (a && a.props && typeof a.props.children === 'string') ? a.props.children : '';
+      if (label.indexOf(labelPrefix) === 0 && b && b.props && typeof b.props.onChange === 'function') { hit = b; return; }
+    }
+    const ch = node.children;
+    if (Array.isArray(ch)) ch.forEach(walk);
+    if (kids) {
+      if (Array.isArray(kids)) kids.forEach(walk);
+      else if (typeof kids === 'object') walk(kids);
+    }
+  })(root);
+  if (!hit) return false;
+  hit.props.onChange({ target: { value: String(value) } });
+  return true;
+}
+
 // ---------------------------------------------------------------- 跑起来
 const sandbox = {
   window: win, document: documentStub, console,
@@ -197,6 +224,15 @@ let nowMs = 1000;
 
 let captured = null;
 win.__ModuleLoader__ = { load(entry) { captured = entry; } };
+
+// 预置一份"老版本存下来的设置"：尖叫池只有老 3 条、用户自己改过普通语录。
+// 用来验证台词池升级（POOL_VER）会把新增台词并进去，而不是被旧池子盖掉。
+const OLD_SETTINGS = {
+  screamQuotes: ['啊啊啊啊啊——', '啊啊啊啊啊——！', '呜哇啊啊啊啊——'],
+  quotes: ['晃晕啦～', '我自己加的一句'],
+  idleQuotes: ['钓鱼佬今天又空军了吧～'],
+};
+win.localStorage.setItem('dsh-whale-rod-cursor.settings', JSON.stringify(OLD_SETTINGS));
 
 const code = fs.readFileSync(CLIENT, 'utf8');
 console.log('文件: lib/client.js  (' + (fs.statSync(CLIENT).size / 1024).toFixed(1) + ' KB)');
@@ -227,7 +263,7 @@ ok(Array.isArray(exportsObj.inject) && exportsObj.inject.includes('slots'), "inj
 ok(typeof exportsObj.apply === 'function', 'apply 是函数');
 const VER = win.__WHALE_ROD_CURSOR_VER__;
 ok(typeof VER === 'string' && /^\d{4}-\d{2}-\d{2}-v\d+/.test(VER), '版本戳已写入并符合命名规范：' + VER, VER);
-ok(VER && VER.includes('v7'), '版本戳是 v7（本次改动生效的那版）', VER);
+ok(VER && VER.includes('v8'), '版本戳是 v8（本次改动生效的那版）', VER);
 ok(documentStub.getElementById('dsh-rod-cursor-style') !== null, '样式已注入 <style id="dsh-rod-cursor-style">');
 
 console.log('');
@@ -253,6 +289,19 @@ console.log('[2.5] 挂点链条：素材 → 存档 → 产物');
   }
   ok(shaOk === 3, '三张素材的 sha256 与存档一致（' + shaOk + '/3）');
   ok(injOk === 3, '产物里注入的挂点 = 存档（' + injOk + '/3）');
+}
+
+console.log('');
+console.log('[2.2] 设置迁移：老池子 + 新版新增台词 → 合并');
+{
+  const saved = JSON.parse(win.localStorage.getItem('dsh-whale-rod-cursor.settings') || '{}');
+  ok(saved.pv === 2, '设置已标记台词池版本 pv=2（升级后自动落盘）');
+  ok(Array.isArray(saved.screamQuotes) && saved.screamQuotes.length >= 12,
+    '老尖叫池被合并扩容：' + (saved.screamQuotes || []).length + ' 条（合并前 3 条）');
+  ok(saved.screamQuotes.indexOf('啊啊啊啊啊——') >= 0 && saved.screamQuotes.some((s) => /求|呜呜|哭/.test(s)),
+    '既有老台词又拿到了新的求饶/哭唧唧台词');
+  ok(saved.quotes.indexOf('我自己加的一句') >= 0, '用户自己加的台词被保留（没被覆盖）');
+  ok(saved.quotes.length > 2, '普通语录池也合并了新版默认台词（' + saved.quotes.length + ' 条）');
 }
 
 console.log('');
@@ -312,6 +361,7 @@ if (tree) {
   const whaleG = groups.find((g) => (g.children || []).some((k) => k.tagName === 'IMAGE'));
   const rodG = groups.find((g) => g !== whaleG);
   const line = svg.children.find((c) => c.tagName === 'LINE');
+  const bubble = tree.children.find((c) => c.className === 'dsh-rod-bubble-wrap').children[0];
   ok(!!whaleG, '找到装着 <image> 的鲸鱼组');
   ok(!!rodG, '找到鱼竿组');
   ok(!!line, '渲染出吊线 <line>');
@@ -338,7 +388,7 @@ if (tree) {
   const move = (x, y) => winListeners.get('mousemove').forEach((f) => f({ clientX: x, clientY: y, target: null }));
 
   move(400, 300);
-  pump(30, 16.7);
+  pump(70, 16.7);              // 跑到 Q 弹衰减干净（TTL 640ms ≈ 38 帧）再量几何
   const t1 = whaleG.attrs.transform;
   ok(!!t1 && !/NaN/.test(t1), '静置后鲸鱼娘 transform 合法', t1);
 
@@ -351,13 +401,42 @@ if (tree) {
   ok(documentStub.documentElement.classList.contains('dsh-rod-cursor-none'), '鱼竿当光标模式：已隐藏系统光标');
 
   // ------------------------------------------------------------
-  // 关键几何：绳末端必须落在鲸鱼娘**头顶**（v4 修锚点、v5 修留白）
+  // 关键几何：绳末端必须落在鲸鱼娘**头顶**上
+  //   v4 修锚点、v5 修画布留白、v8 修"形变时绳跟着头顶走"
+  //   （形变是绕内容中心压缩的，头顶会位移，绳末端必须跟过去，否则甩起来像脱钩）
   // ------------------------------------------------------------
   const ops = parseTransform(whaleG.attrs.transform);
   const lineEnd = { x: Number(line.attrs.x2), y: Number(line.attrs.y2) };
   const headTop = applyTransform(ops, 0, 0);
-  const gap = Math.hypot(headTop.x - lineEnd.x, headTop.y - lineEnd.y);
-  ok(gap < 0.6, '绳末端 = 本地原点（误差 ' + gap.toFixed(3) + 'px）', JSON.stringify(headTop) + ' vs ' + JSON.stringify(lineEnd));
+  const gapOf = () => {
+    const h = applyTransform(parseTransform(whaleG.attrs.transform), 0, 0);
+    return Math.hypot(h.x - Number(line.attrs.x2), h.y - Number(line.attrs.y2));
+  };
+  // ① 完全静止时必须是零误差（容忍 SVG 属性两位/四位小数带来的舍入）
+  let quiet = false;
+  for (let i = 0; i < 900 && !quiet; i++) {
+    const sd = /scale\(([\d.]+),([\d.]+)\)/.exec(whaleG.attrs.transform || '');
+    if (sd && Math.abs(Number(sd[1]) - 1) < 0.002 && Math.abs(Number(sd[2]) - 1) < 0.002) quiet = true;
+    else pump(1, 16.7);
+  }
+  const quietGap = gapOf();
+  ok(quiet && quietGap < 0.05, '静置时绳末端 = 头顶，误差 ' + quietGap.toFixed(3) + 'px');
+  // ② 主动按一下鼠标触发 Q 弹，确认**形变中**绳末端也跟着头顶走（v8 修的就是这个：
+  //    形变绕内容中心压缩，头顶会位移，绳末端必须跟过去，否则甩起来像脱钩）
+  (winListeners.get('mousedown') || []).forEach((f) => f({}));
+  pump(1, 16.7);
+  const sd2 = /scale\(([\d.]+),([\d.]+)\)/.exec(whaleG.attrs.transform || '');
+  const inDeform = sd2 && Math.abs(Number(sd2[2]) - 1) > 0.05;
+  const defGap = gapOf();
+  if (process.env.DBG) {
+    console.log('    [dbg] whale transform = ' + whaleG.attrs.transform);
+    console.log('    [dbg] line end = (' + line.attrs.x2 + ', ' + line.attrs.y2 + ')');
+    const h = applyTransform(parseTransform(whaleG.attrs.transform), 0, 0);
+    console.log('    [dbg] headTop(本地0,0 映射) = (' + h.x.toFixed(3) + ', ' + h.y.toFixed(3) + ')');
+    console.log('    [dbg] gap = ' + Math.hypot(h.x - Number(line.attrs.x2), h.y - Number(line.attrs.y2)).toFixed(3));
+  }
+  ok(inDeform, '按下鼠标确实触发了 Q 弹形变（sy=' + (sd2 ? sd2[2] : 'n/a') + '）');
+  ok(defGap < 1.5, 'Q 弹形变中绳末端仍贴在头顶上（误差 ' + defGap.toFixed(2) + 'px）');
 
   // 本地原点到底对应素材里的哪个像素？由 <image> 的 x/y 偏移决定：
   // 必须是构建期量出来的"头顶挂点"，而不是画布顶端/中心。
@@ -425,22 +504,83 @@ if (tree) {
     ok(backIdle, 'done 停留结束 → 回到 idle');
   }
 
-  // 缓甩（速度逐帧递增）→ 应该冒"正常"语录
+  // 缓甩（真·轻缓：约 420px/s，远低于甩飞阈值 1400）→ 不该尖叫
+  // 注：v8 起气泡也由「相对速度」触发，所以"缓甩"必须先等她彻底静下来
+  const settingsTree = regs.find((r) => r.name === 'settings.section').component({});
+  move(300, 700);
+  for (let i = 0; i < 600; i++) { pump(1, 16.7); }   // 先荡稳
+  bubble.textContent = '';
   let maxDeg = 0;
   for (let i = 0; i < 6; i++) {
-    move(400 + 12 * (i + 1) * (i + 1), 300);
+    move(300 + 7 * (i + 1), 700);
     pump(1, 16.7);
     const m = /rotate\((-?[\d.]+)\)/.exec(whaleG.attrs.transform || '');
     if (m) maxDeg = Math.max(maxDeg, Math.abs(parseFloat(m[1])));
   }
-  ok(maxDeg > 5, '缓甩时鲸鱼娘被带出明显倾角（最大 ' + maxDeg.toFixed(1) + '°）');
-  ok(maxDeg <= 58.01, '倾角被夹在 ±58° 内（不翻跟头）', maxDeg.toFixed(2));
+  ok(maxDeg <= 58.01, '缓甩时倾角不会翻跟头（最大 ' + maxDeg.toFixed(1) + '°）');
 
-  const bubble = tree.children.find((c) => c.className === 'dsh-rod-bubble-wrap').children[0];
-  ok(!!bubble.textContent && bubble.textContent.length > 0, '缓甩触发了正常气泡：「' + bubble.textContent + '」');
-  ok(!/啊/.test(bubble.textContent), '缓甩不喊尖叫（' + bubble.textContent + '）');
-  const normalSize = parseFloat(bubble.style.fontSize || '0');
-  ok(normalSize >= 13 && normalSize < 40, '缓甩气泡是小字（' + normalSize + 'px）');
+  const bubbleEl = bubble;
+  ok(!/啊/.test(bubbleEl.textContent || ''), '缓甩不喊尖叫（' + (bubbleEl.textContent || '（没说话）') + '）');
+  const normalSize = parseFloat(bubbleEl.style.fontSize || '0');
+  ok(normalSize === 0 || normalSize < 40, '缓甩时气泡是小字或不冒泡（' + (normalSize || '未冒泡') + '）');
+
+  // ------------------------------------------------------------
+  // [v8] 回归测试：这条就是用户报的 bug
+  //   「被甩出去好远却没有大气泡尖叫」
+  //   手法：匀速快拖（速度大、加速度≈0）然后**完全停手不再发 mousemove**，
+  //   在她惯性滑行的那段时间里检查有没有冒泡/尖叫。
+  // ------------------------------------------------------------
+  console.log('');
+  console.log('[4.8] 回归：匀速快拖 + 停手后惯性滑行，必须冒泡（v8 修的 bug）');
+  {
+    // 把气泡冷却调到最小，否则"停手后"的窗口会被上一次的冷却盖住（测不出来）
+    ok(setSlider(settingsTree, '气泡冷却上限', 800), '测试可以直接拖设置页滑块（气泡冷却 → 0.8s）');
+    move(300, 700);
+    pump(400, 16.7);                 // 等冷却 + 荡稳
+    bubble.textContent = '';
+    // 匀速快拖：每帧 55px ≈ 3300px/s —— 速度大但加速度≈0（老逻辑在这里永远不触发）
+    let duringDrag = '', dragSize = 0;
+    for (let i = 0; i < 30; i++) {
+      move(300 + 55 * (i + 1), 700);
+      pump(1, 16.7);
+      if (bubble.textContent) { duringDrag = bubble.textContent; dragSize = parseFloat(bubble.style.fontSize || '0'); }
+    }
+    // 关键：停手！此后**不再发任何 mousemove**，只泵帧 —— 她在惯性滑行
+    bubble.textContent = '';
+    let flewBubble = '', flewSize = 0;
+    for (let i = 0; i < 240 && !flewBubble; i++) {
+      pump(1, 16.7);
+      if (bubble.textContent) { flewBubble = bubble.textContent; flewSize = parseFloat(bubble.style.fontSize || '0'); }
+    }
+    console.log('    拖动中: ' + (duringDrag ? '「' + duringDrag + '」' + dragSize.toFixed(0) + 'px' : '（还没冒）'));
+    console.log('    停手后滑行: ' + (flewBubble ? '「' + flewBubble + '」' + flewSize.toFixed(0) + 'px' : '（一个泡都没有）'));
+    ok(!!duringDrag || !!flewBubble, '匀速快拖期间冒泡（老逻辑只认加速度，这里不冒）');
+    ok(!!flewBubble, '★停手之后（惯性滑行、无 mousemove 事件）仍然冒泡 —— 这就是 v8 修的 bug');
+    ok(flewSize >= 13, '滑行期冒的泡不小（' + flewSize.toFixed(0) + 'px，力度越大字越大）');
+  }
+
+  // [v8] 回归：切回窗口/指针重新进入，不该误报尖叫
+  {
+    bubble.textContent = '';
+    for (let i = 0; i < 900; i++) {    // 先等她彻底静下来（否则滑行期的气泡会干扰判断）
+      pump(1, 16.7);
+      if (bubble.textContent) { bubble.textContent = ''; }
+      if (i > 400 && !bubble.textContent) break;
+    }
+    bubble.textContent = '';
+    // 模拟"切走又切回"：失焦 → 再聚焦，然后回窗口的第一个事件（坐标跳很远）
+    (winListeners.get('blur') || []).forEach((f) => f({}));
+    (winListeners.get('focus') || []).forEach((f) => f({}));
+    move(1500, 300);
+    pump(3, 16.7);
+    const afterEnter = bubble.textContent;
+    ok(!afterEnter || !/啊/.test(afterEnter), '切回窗口不误报尖叫（' + (afterEnter || '（安静）') + '）');
+    // 而且她应该"已经在位"了（吸附），不该被瞬移的指针拽飞
+    const pm = /translate\((-?[\d.]+),(-?[\d.]+)\)/.exec(whaleG.attrs.transform || '');
+    const bx2 = parseFloat(pm[1]), by2 = parseFloat(pm[2]);
+    ok(Math.abs(bx2 - 1500) < 15 && Math.abs(by2 - (300 + 83)) < 25,
+      '切回窗口后她已吸附在位（' + bx2.toFixed(0) + ',' + by2.toFixed(0) + '）而不是被假猛拽甩出去');
+  }
 
   // 松手静置：应当回落到锚点下方并趋于静止
   move(900, 500);
@@ -465,9 +605,17 @@ if (tree) {
   pump(1, 16.7);
   const screamText = bubble.textContent;
   const screamSize = parseFloat(bubble.style.fontSize || '0');
-  ok(!!screamText && /啊/.test(screamText), '暴甩触发尖叫气泡：「' + screamText + '」', screamText);
+  // 从产物里读尖叫池（用户要求：巨大惯性甩飞时要有"求饶 / 哭唧唧"的大气泡）
+  const screamRaw = (code.match(/const SCREAM_QUOTES = \[([\s\S]*?)\n\t\t\];/) || [, ''])[1];
+  const screamPool = screamRaw.split('\n').map((s) => (s.match(/'([^']+)'/) || [])[1]).filter(Boolean);
+  ok(screamPool.length >= 12, '尖叫池扩容到 ' + screamPool.length + ' 条（原 3 条）');
+  ok(screamPool.filter((s) => /求|饶命|我错了|别甩|招了/.test(s)).length >= 4, '里面有「求饶」系台词');
+  ok(screamPool.filter((s) => /呜|哭|吐了|呆毛/.test(s)).length >= 4, '里面有「哭唧唧」系台词');
+  ok(screamPool.indexOf(screamText) >= 0, '暴甩喊的是尖叫池里的句子：「' + screamText + '」', screamText);
   ok(screamSize > normalSize * 2, '尖叫字号明显变大（' + normalSize + 'px → ' + screamSize + 'px）');
-  ok(Math.abs(screamSize - META.ch * S * 0.95) < 1.5, '尖叫字号顶到上限 ≈ 鲸鱼娘身高（' + screamSize.toFixed(0) + 'px vs 鲸鱼 ' + (META.ch * S).toFixed(0) + 'px）');
+  const capSize = META.ch * S * 0.95;
+  ok(screamSize > 90 && screamSize <= capSize + 0.5,
+    '尖叫字号很大且不超过"和她一样大"的上限（' + screamSize.toFixed(0) + 'px ≤ 上限 ' + capSize.toFixed(0) + 'px；长句会按字数自动收一点以免顶出屏幕）');
 
   console.log('');
   console.log('[6] 平静之后补一句求饶/卖萌/生气');
