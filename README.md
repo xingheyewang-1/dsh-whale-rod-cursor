@@ -187,14 +187,15 @@ Q 弹形变中误差    0.01px    （按下鼠标触发形变后实测）
 
 ## 七、安装
 
-**从插件市场 / npm（发布后可用）**：
+**从插件市场安装（推荐）**：
 
 ```bash
 # 认准 profile：本插件是 Web 端插件，profile 用 web
-dsh plugin --profile web add dsh-whale-rod-cursor
+# 与市场详情页给出的命令一致：走 GitHub 分发，不依赖 npm
+dsh plugin --profile web add github:xingheyewang-1/dsh-whale-rod-cursor
 ```
 
-**从 GitHub 源码安装**：
+**从 GitHub 源码安装（等效长写法）**：
 
 ```bash
 dsh plugin --profile web add git+https://github.com/xingheyewang-1/dsh-whale-rod-cursor.git
@@ -219,7 +220,7 @@ node H:\DSH_Workspace\tools\dsh-whale-rod-cursor\install-to-profile.mjs
 重启后**硬刷新**页面，控制台输入：
 
 ```js
-__WHALE_ROD_CURSOR_VER__     // 应输出 '2026-09-15-v7-theater'
+__WHALE_ROD_CURSOR_VER__     // 应输出 '2026-09-15-v8-swingbubble'
 ```
 
 看到这个版本戳 = 新代码真的生效了。看不到 = 还在跑老 bundle。
