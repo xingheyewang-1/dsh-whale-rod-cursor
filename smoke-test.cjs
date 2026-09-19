@@ -19,7 +19,7 @@ const vm = require('vm');
 const CLIENT = path.join(__dirname, 'lib', 'client.js');
 const PKG = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
 const ANCHOR_JSON = path.join(__dirname, 'lib', 'whale-anchor.json');
-const ASSET_DIR = 'H:/DSH_Workspace/ref/cursor-candidates/';
+const ASSET_DIR = 'F:/DSH_Workspace/ref/cursor-candidates/';
 // 挂点信息由 build.cjs 逐张量出来后注入 client.js，并存档在 lib/whale-anchor.json
 const SIDECAR = JSON.parse(fs.readFileSync(ANCHOR_JSON, 'utf8'));
 const POSES = SIDECAR.poses;

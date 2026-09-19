@@ -208,7 +208,7 @@ dsh plugin --profile web add git+https://github.com/xingheyewang-1/dsh-whale-rod
 
 ```powershell
 # 一条命令搞定（幂等，可反复跑）
-node H:\DSH_Workspace\tools\dsh-whale-rod-cursor\install-to-profile.mjs
+node F:\DSH_Workspace\tools\dsh-whale-rod-cursor\install-to-profile.mjs
 
 # 它会做三件事：
 #   1. 复制插件到 ~/.dsh/plugins/dsh-whale-rod-cursor
@@ -281,7 +281,7 @@ __WHALE_ROD_CURSOR_VER__     // 应输出 '2026-09-15-v8-swingbubble'
 ## 九、开发
 
 ```powershell
-cd H:\DSH_Workspace\tools\dsh-whale-rod-cursor
+cd F:\DSH_Workspace\tools\dsh-whale-rod-cursor
 
 # build 会逐张现量素材挂点（jimp 扫 alpha）→ 注入 __WHALE_POSES__ → 存档 lib/whale-anchor.json
 node build.cjs      # lib/client.src.js --(注入三张素材 + 各自挂点)--> lib/client.js（并留 lib/client.js.prev 回滚点）
@@ -319,7 +319,25 @@ node smoke-test.cjs # 106 项冒烟测试
 - 只作用于 Web 界面（`platform: 'web'`），不影响终端 TUI
 - 藏系统光标是"整站生效"的：DSH 界面里若有个别控件自带特殊光标，也会被一起藏掉（鱼竿会替它变色）
 
-## 十一、出处与授权
+## 十一、版本记录（更新了什么）
+
+**当前版本：v0.1.9**（版本戳 `2026-09-18-v15-perf`）。完整的逐版明细（每个版本改了什么、为什么改、
+以及踩过的坑）都写在 **`NOTICE.md` 第四节「版本沿革」** —— 那份声明不只是素材出处，也如实记录了
+这个插件的演进过程。
+
+近期几条（细节见 NOTICE）：
+
+| 版本 | 一句话 |
+| --- | --- |
+| **v0.1.9** | **性能优先**：静息快车道 + DOM 写入去重 + 轮询改按需（静息期插件写入降约 170 倍） |
+| v0.1.8 | 脱钩打磨：宕机期鼠标不再牵引她、沉底整身可见、浮在水里的轻晃 |
+| v0.1.7 | 手感与台词校正：门槛按气泡冷却标定（约 3 秒可断钩）、断钩那一鞭只说一句 |
+| v0.1.6 | **真脱钩**：鱼线淡出 + 竿尖断线头 + 绳子完全不施力，她往下沉 |
+| v0.1.5 | 修"摆烂试不出来"（滚动窗口计数）与"破防后抖个不停"（发抖限时）+ 腹黑台词池 |
+| v0.1.4 | **破防四档**：晃晕 → 求饶 → 破防 → 摆烂；门槛/冷却/时长全可在设置页调 |
+| v0.1.3 | 修"弹窗一开鱼竿就看不见"（浮层搬进 `document.body` 顶层容器，所有弹窗一次修好） |
+
+## 十二、出处与授权
 
 见 **`NOTICE.md`**。简短版：
 

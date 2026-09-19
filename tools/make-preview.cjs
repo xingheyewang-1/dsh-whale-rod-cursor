@@ -10,11 +10,11 @@
  */
 const fs = require('fs');
 const path = require('path');
-const JIMP = 'H:/DSH_Workspace/tools/imgtool/node_modules/jimp';
+const JIMP = 'F:/DSH_Workspace/tools/imgtool/node_modules/jimp';
 const Jimp = require(JIMP);
 
 const ROOT = path.resolve(__dirname, '..');
-const WHALE = 'H:/DSH_Workspace/ref/cursor-candidates/keyed-idle.png';
+const WHALE = 'F:/DSH_Workspace/ref/cursor-candidates/keyed-idle.png';
 const ANCHOR = JSON.parse(fs.readFileSync(path.join(ROOT, 'lib', 'whale-anchor.json'), 'utf8')).poses.idle;
 const OUT_DIR = path.join(ROOT, 'assets', 'preview');
 const OUT = path.join(OUT_DIR, 'schematic.png');

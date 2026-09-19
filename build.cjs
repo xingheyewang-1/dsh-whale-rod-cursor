@@ -25,18 +25,18 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const ROOT = 'H:/DSH_Workspace/tools/dsh-whale-rod-cursor';
+const ROOT = 'F:/DSH_Workspace/tools/dsh-whale-rod-cursor';
 const SRC = ROOT + '/lib/client.src.js';
 const OUT = ROOT + '/lib/client.js';
 const PREV = ROOT + '/.build-cache/client.js.prev';
 const META_OUT = ROOT + '/lib/whale-anchor.json';
-const JIMP = 'H:/DSH_Workspace/tools/imgtool/node_modules/jimp';
+const JIMP = 'F:/DSH_Workspace/tools/imgtool/node_modules/jimp';
 
 // 姿态包：key 就是源码里用的姿态名
 const ASSETS = {
-  idle: { file: 'H:/DSH_Workspace/ref/cursor-candidates/keyed-idle.png', label: '平时' },
-  work: { file: 'H:/DSH_Workspace/ref/cursor-candidates/keyed-work.png', label: '在忙' },
-  done: { file: 'H:/DSH_Workspace/ref/cursor-candidates/keyed-done.png', label: '干完了' },
+  idle: { file: 'F:/DSH_Workspace/ref/cursor-candidates/keyed-idle.png', label: '平时' },
+  work: { file: 'F:/DSH_Workspace/ref/cursor-candidates/keyed-work.png', label: '在忙' },
+  done: { file: 'F:/DSH_Workspace/ref/cursor-candidates/keyed-done.png', label: '干完了' },
 };
 
 if (!fs.existsSync(SRC)) { console.log('✗ 找不到源码 ' + SRC); process.exit(1); }
