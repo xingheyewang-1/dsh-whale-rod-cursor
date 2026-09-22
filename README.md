@@ -239,10 +239,26 @@ __WHALE_ROD_CURSOR_VER__     // 应输出 '2026-09-15-v8-swingbubble'
 
 ### 预览
 
+#### 真机截图（DSH Web 实拍）
+
+![全景 · 真机](assets/preview/全景.png)
+
+![鱼竿光标 · 真机](assets/preview/鱼竿截图1.png)
+
+![鲸鱼娘特写](assets/preview/鲸鱼娘特写.png)
+
+![闲置小剧场](assets/preview/小剧场.png)
+
+> 以上为 **DSH Web 真机实拍**（光标是一根鱼竿，弹性绳吊着 Q 版鲸鱼娘）：第一张是**整屏全景**
+> （能看出它确实长在 DSH 界面里：输入框、会话标题、底部挂件都在），第二张是鱼竿+挂件，
+> 第三张是挂件特写（发箍、围裙上的小蓝鲸、双马尾），第四张是鼠标停 6 秒后自己开演的
+> 「钓鱼佬又空军了」闲置小剧场。
+
+#### 示意图（程序绘制，非截图）
+
 ![示意图](assets/preview/schematic.png)
 
-> 上图是**程序绘制的示意图**（`node tools/make-preview.cjs` 生成），不是真机截图 ——
-> 真机截图见 `assets/preview/screenshot.png`（欢迎 PR 补充，Win+Shift+S 即可）。
+> 上图为程序绘制的整体几何示意图（`node tools/make-preview.cjs` 生成），用于说明绳长、挂点与缩放关系。
 
 > **⚠️ 一个坑（重要）**：本插件是**手工放进 `node_modules`** 的，没有写进 profile 的
 > `package.json` dependencies（桌宠 `dsh-whale-girl-pet` 才是靠 npm 装的）。
