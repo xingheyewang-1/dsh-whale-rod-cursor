@@ -1,6 +1,6 @@
 {
   "name": "dsh-whale-rod-cursor",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "🎣 鱼竿鲸鱼娘光标 —— 在 DeepSeek Harness Web 界面上挂一根鱼竿，线上吊着 Q 版鲸鱼娘，随鼠标甩动摆荡；悬停输入框/点击时鱼竿变色，甩猛了冒出「啊啊啊啊啊——」气泡，鼠标停下来还会演「钓鱼佬又空军了」小剧场。A fishing-rod cursor companion for the DSH Web UI.",
   "keywords": [
     "dsh",

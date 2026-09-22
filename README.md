@@ -15,7 +15,7 @@
 > 她还会**跟着 DSH 的干活状态换姿态**：平时 / 在忙 / 干完了。
 > 悬停输入框 / 按钮 / 按下鼠标时，鱼竿会**变色**，让你用余光就知道"现在点得到什么"。
 
-当前版本：**v8**（`__WHALE_ROD_CURSOR_VER__ = '2026-09-15-v8-swingbubble'`，包版本 0.1.2）
+当前版本：**v15.1**（`__WHALE_ROD_CURSOR_VER__ = '2026-09-22-v15.1-0.1.10'`，包版本 0.1.10）
 
 ---
 
@@ -220,7 +220,7 @@ node F:\DSH_Workspace\tools\dsh-whale-rod-cursor\install-to-profile.mjs
 重启后**硬刷新**页面，控制台输入：
 
 ```js
-__WHALE_ROD_CURSOR_VER__     // 应输出 '2026-09-15-v8-swingbubble'
+__WHALE_ROD_CURSOR_VER__     // 应输出 '2026-09-22-v15.1-0.1.10'
 ```
 
 看到这个版本戳 = 新代码真的生效了。看不到 = 还在跑老 bundle。

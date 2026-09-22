@@ -200,3 +200,37 @@ SOFTWARE.
 
 *如果你是本插件的接收方：这份声明与 `package.json` 里的 `author` 字段请一起保留。
 去除上游署名后再分发，是不礼貌的，也可能违反 MIT 的版权声明保留要求。*
+
+---
+
+## 七、附：`cordis.patch.yml` 为什么必须写成 `[]`（2026-09-22 事故记录）
+
+本插件的 `cordis.patch.yml` 内容就是两个字符：**`[]`**（一个空的 YAML 数组）。
+**这不是占位符，是硬性要求**，随便改会直接把 `dsh web` 起不来。
+
+### 加载器怎么读它（dsh-app-boot 源码）
+```js
+function loadOverlayPatches(binName, file) {
+  content = readFileSync(file, "utf8");          // ① 文件必须存在，缺了直接 throw
+  return parsePatchList(binName, file, content, "overlay");
+}
+function parsePatchList(...) {
+  parsed = yaml.load(content, { schema: userPatchesSchema });
+  if (!Array.isArray(parsed)) throw new Error(`... must be a top-level YAML array of loader patch entries`);  // ②
+  parsed.forEach((entry, index) => { /* ③ 每项必须是 mapping */ });
+}
+```
+
+### 三种写法实测（用 dsh 自带的 yaml 包真实解析）
+| 文件内容 | `yaml.load` 结果 | 结果 |
+| --- | --- | --- |
+| **`[]`** | `[]` | ✅ 通过（正确写法） |
+| 只有注释（如 `# 留空`） | **`null`** | ❌ `must be a top-level YAML array` |
+| 写了 `- insert: id: rod-cursor` | `[{insert:[…]}]` | ❌ `duplicate loader entry id: rod-cursor` |
+
+**两个坑，都真踩过：**
+1. **"纯注释 = 留空"是错的** —— YAML 里注释不产生值，解析结果是 `null`，`Array.isArray(null)` 为假 → 启动报错。
+2. **本文件里绝不能写 `insert`** —— 插件已登记在 `package.json` 的 `dsh.profile.bundles` 里，加载器会**自动注册**条目 id（`rod-cursor`）。这里再手工 insert 一个同名 id 就是"同一个 id 注册两次" → 启动直接失败。
+
+### 顺带一条：`.dsh` 目录树的扫描规则
+调试期间曾把过期备份留在 `.dsh` 里（`plugins\dsh-whale-rod-cursor(旧)\`、`移除文件\_backup-before-h-to-f.bak\`），**改名加 `.bak` 没用** —— 加载器扫的是**整个 `.dsh` 目录树里的 `.yml`**，不看目录叫什么。要让它失效，**必须把这些目录搬出 `.dsh`**。
