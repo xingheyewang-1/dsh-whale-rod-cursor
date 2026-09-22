@@ -17,11 +17,11 @@
 | --- | --- |
 | 上游项目 | [`yanzwzz/dsh-whale-girl-pet`](https://github.com/yanzwzz/dsh-whale-girl-pet) |
 | 上游许可 | **MIT License** |
-| 取用文件 | 包内 `assets/preview/preview-{idle,work,done}.gif`（三张仓库预览动图） |
+| 取用文件 | **上游仓库内**的 `assets/preview/preview-{idle,work,done}.gif`（三张预览动图）——注意：这些 GIF **在本仓库里没有**，此处只说明上游来源 |
 | 取了什么 | **每个 GIF 的第 1 帧**里的角色本体 |
 | 加工方式 | ① 抽出首帧 → ② 从四边做洪水填充（阈值 26）抠掉背景得到透明通道 → ③ 等比缩放（高统一 180）→ ④ base64 内嵌进 `lib/client.js` |
 | 加工者 | 星河野望 |
-| 成品文件 | `F:\DSH_Workspace\ref\cursor-candidates\keyed-idle.png`（144×180，65.0 KB）<br>`keyed-work.png`（159×180，68.9 KB）<br>`keyed-done.png`（160×180，69.6 KB） |
+| 成品文件 | 抠好的三张（本地制作目录 `F:\DSH_Workspace\ref\cursor-candidates\`，**仅存于作者本机、未随仓库分发**）：`keyed-idle.png`（144×180，65.0 KB）<br>`keyed-work.png`（159×180，68.9 KB）<br>`keyed-done.png`（160×180，69.6 KB）<br>**实际分发形态**：三张图以 **base64 内嵌**在 `lib/client.js` 里，本仓库不再单独分发原始 PNG/GIF |
 | 在插件里的用途 | v6 起作为**姿态包**：idle＝平时 / work＝DSH 在跑 / done＝跑完了（切换只改 `display`，三张都在 DOM 里） |
 
 **上游的 MIT 版权声明与许可条款完整保留**，未做任何删除或修改。
@@ -29,6 +29,8 @@
 但**不能说成"我自己画的"**，也不能去掉这份声明。
 
 > v1 只用了 idle 一张；v6 起三张全用上（work / done 的声明在此补齐）。
+> **`assets/preview/*.png`（README 里的真机截图 / 特写 / 小剧场）同样包含本节的鲸鱼娘形象**，
+> 属同一份 MIT 声明覆盖范围，不得声称该形象为截图作者原创。
 > 上游同项目还有更多动作素材（`assets/thumb/*.webm`，上百个），
 > 若要继续取用，需按「扒素材前置流程」逐项补声明。
 
