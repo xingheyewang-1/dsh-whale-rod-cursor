@@ -19,7 +19,9 @@ const vm = require('vm');
 const CLIENT = path.join(__dirname, 'lib', 'client.js');
 const PKG = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
 const ANCHOR_JSON = path.join(__dirname, 'lib', 'whale-anchor.json');
-const ASSET_DIR = 'F:/DSH_Workspace/ref/cursor-candidates/';
+// [v15.1] 素材目录不再写死 H 盘（工作区能搬家：路径按脚本位置推）
+const PP = require('./lib/portable-paths.cjs');
+const ASSET_DIR = PP.ASSET_DIR;
 // 挂点信息由 build.cjs 逐张量出来后注入 client.js，并存档在 lib/whale-anchor.json
 const SIDECAR = JSON.parse(fs.readFileSync(ANCHOR_JSON, 'utf8'));
 const POSES = SIDECAR.poses;
@@ -33,31 +35,113 @@ function ok(cond, msg, extra) {
 }
 
 // ---------------------------------------------------------------- 假 DOM
+// [v15] 性能自检要用：数一数插件到底往 DOM 写了多少次。
+//   每次 setAttribute / style 写入都会让浏览器重算样式；用户明确要求
+//   "这是鼠标，不能影响鼠标性能"，所以"静息时几乎不写"这件事必须能测出来。
+const DOMSTAT = {
+  attrs: 0, styles: 0, classes: 0,
+  reset() { this.attrs = 0; this.styles = 0; this.classes = 0; },
+  get total() { return this.attrs + this.styles + this.classes; },
+};
+
 function fakeEl(tag) {
   const el = {
     tagName: String(tag).toUpperCase(),
     attrs: {}, children: [], textContent: '', offsetWidth: 0, id: '',
-    style: { setProperty(k, v) { this[k] = v; }, removeProperty(k) { delete this[k]; } },
+    // styles 通过 defineProperty 计数（插件写 style.transform 的地方）
+    style: (function () {
+      const st = { setProperty(k, v) { this[k] = v; }, removeProperty(k) { delete this[k]; } };
+      let _text = '';
+      Object.defineProperty(st, 'cssText', {
+        set(v) {
+          _text = v;
+          DOMSTAT.styles++;
+          // 真 DOM 会把声明解析成属性（插件用 cssText 设 position/z-index 等，测试要能读回来）
+          String(v).split(';').forEach((piece) => {
+            const i = piece.indexOf(':');
+            if (i > 0) st[piece.slice(0, i).trim()] = piece.slice(i + 1).trim();
+          });
+        },
+        get() { return _text; },
+      });
+      Object.defineProperty(st, 'transform', {
+        set(v) { DOMSTAT.styles++; Object.defineProperty(st, '_tf', { value: v, writable: true, configurable: true }); },
+        get() { return st._tf; },
+      });
+      Object.defineProperty(st, 'display', {
+        set(v) { DOMSTAT.styles++; Object.defineProperty(st, '_dp', { value: v, writable: true, configurable: true }); },
+        get() { return st._dp; },
+      });
+      Object.defineProperty(st, 'fontSize', {
+        set(v) { DOMSTAT.styles++; Object.defineProperty(st, '_fs', { value: v, writable: true, configurable: true }); },
+        get() { return st._fs; },
+      });
+      return st;
+    })(),
     classList: {
       _s: new Set(),
-      add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); }, contains(c) { return this._s.has(c); },
+      add(c) { DOMSTAT.classes++; this._s.add(c); },
+      remove(c) { DOMSTAT.classes++; this._s.delete(c); },
+      contains(c) { return this._s.has(c); },
+      // 真 DOM 的 toggle 支持第二个"强制"参数（插件用它开/关），假 DOM 必须跟上
+      toggle(c, force) {
+        DOMSTAT.classes++;
+        const on = (force === undefined) ? !this._s.has(c) : !!force;
+        if (on) this._s.add(c); else this._s.delete(c);
+        return on;
+      },
     },
-    setAttribute(k, v) { this.attrs[k] = v; },
+    setAttribute(k, v) { DOMSTAT.attrs++; this.attrs[k] = v; },
     getAttribute(k) { return this.attrs[k]; },
-    appendChild(c) { this.children.push(c); return c; },
-    removeChild(c) { this.children = this.children.filter((x) => x !== c); return c; },
+    // [v9] 真实 DOM 会给 appendChild 自动带上 parentNode —— 这里照做，
+    //      因为"顶层容器搬运"要靠 parentNode 判幂等，不模拟就测不出来。
+    appendChild(c) {
+      if (c && typeof c === 'object') {
+        if (c.parentNode && typeof c.parentNode.removeChild === 'function') c.parentNode.removeChild(c);
+        c.parentNode = this;
+      }
+      // 真实 DOM 的同一个节点不可能在同处出现两次；重复 push 就是 bug，别掩盖
+      if (this.children.indexOf(c) < 0) this.children.push(c);
+      return c;
+    },
+    removeChild(c) {
+      this.children = this.children.filter((x) => x !== c);
+      if (c && typeof c === 'object') c.parentNode = null;
+      return c;
+    },
+    contains(c) {
+      if (c === this) return true;
+      return this.children.some((k) => k && typeof k.contains === 'function' && k.contains(c));
+    },
+    remove() { if (this.parentNode) this.parentNode.removeChild(this); },
+    matches() { return false; },              // 假 DOM 不实现选择器（真实浏览器里才有）
+    querySelectorAll() { return []; },        // 同上：插件必须容得下"没有选择器"
     addEventListener() {}, removeEventListener() {},
   };
   return el;
 }
 
 const head = fakeEl('head');
+const bodyEl = fakeEl('body');
+const htmlEl = fakeEl('html');
+htmlEl.appendChild(head);
+htmlEl.appendChild(bodyEl);
+
+/** 假 DOM 里按 id 找节点（真实 getElementById 不挑位置，这里也全树找）。 */
+function findById(node, id) {
+  if (!node || typeof node !== 'object') return null;
+  if (node.id === id) return node;
+  for (const k of (node.children || [])) { const hit = findById(k, id); if (hit) return hit; }
+  return null;
+}
 const documentStub = {
   head,
-  documentElement: fakeEl('html'),
+  body: bodyEl,
+  documentElement: htmlEl,
   hidden: false,
   createElement: (t) => fakeEl(t),
-  getElementById: (id) => head.children.find((c) => c.id === id) || null,
+  getElementById: (id) => findById(htmlEl, id),
+  querySelectorAll: () => [],     // 真浏览器才有；插件读不到时必须安全退化
   addEventListener() {}, removeEventListener() {},
 };
 
@@ -76,7 +160,7 @@ const win = {
   },
   setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); if (t.unref) t.unref(); return t; },
   clearTimeout: (t) => clearTimeout(t),
-  setInterval: (fn, ms) => { const t = setInterval(fn, ms); if (t.unref) t.unref(); return t; },
+  setInterval: (fn, ms) => { win.setInterval._calls = (win.setInterval._calls || 0) + 1; const t = setInterval(fn, ms); if (t.unref) t.unref(); return t; },
   clearInterval: (t) => clearInterval(t),
   requestAnimationFrame(cb) { rafQueue.push(cb); return ++rafId; },
   cancelAnimationFrame() {},
@@ -221,6 +305,7 @@ sandbox.globalThis = sandbox;
 win.document = documentStub;
 win.performance = sandbox.performance;
 let nowMs = 1000;
+let frameCount = 0;      // [v15] pump 过的帧数（性能自检要看"心跳相位"）
 
 let captured = null;
 win.__ModuleLoader__ = { load(entry) { captured = entry; } };
@@ -263,7 +348,7 @@ ok(Array.isArray(exportsObj.inject) && exportsObj.inject.includes('slots'), "inj
 ok(typeof exportsObj.apply === 'function', 'apply 是函数');
 const VER = win.__WHALE_ROD_CURSOR_VER__;
 ok(typeof VER === 'string' && /^\d{4}-\d{2}-\d{2}-v\d+/.test(VER), '版本戳已写入并符合命名规范：' + VER, VER);
-ok(VER && VER.includes('v8'), '版本戳是 v8（本次改动生效的那版）', VER);
+ok(VER && VER.includes('v15'), '版本戳是 v15（本次改动生效的那版）', VER);
 ok(documentStub.getElementById('dsh-rod-cursor-style') !== null, '样式已注入 <style id="dsh-rod-cursor-style">');
 
 console.log('');
@@ -295,13 +380,25 @@ console.log('');
 console.log('[2.2] 设置迁移：老池子 + 新版新增台词 → 合并');
 {
   const saved = JSON.parse(win.localStorage.getItem('dsh-whale-rod-cursor.settings') || '{}');
-  ok(saved.pv === 2, '设置已标记台词池版本 pv=2（升级后自动落盘）');
+  ok(saved.pv === 4, '设置已标记台词池版本 pv=4（升级后自动落盘）');
   ok(Array.isArray(saved.screamQuotes) && saved.screamQuotes.length >= 12,
     '老尖叫池被合并扩容：' + (saved.screamQuotes || []).length + ' 条（合并前 3 条）');
   ok(saved.screamQuotes.indexOf('啊啊啊啊啊——') >= 0 && saved.screamQuotes.some((s) => /求|呜呜|哭/.test(s)),
     '既有老台词又拿到了新的求饶/哭唧唧台词');
   ok(saved.quotes.indexOf('我自己加的一句') >= 0, '用户自己加的台词被保留（没被覆盖）');
   ok(saved.quotes.length > 2, '普通语录池也合并了新版默认台词（' + saved.quotes.length + ' 条）');
+  // ---- [v10] 破防四档的新池子也得能"并进老存档" ----
+  ok(Array.isArray(saved.break2Quotes) && saved.break2Quotes.length >= 4,
+    '② 求饶池随 v10 一并写入老存档：' + (saved.break2Quotes || []).length + ' 条');
+  ok(Array.isArray(saved.break3Quotes) && saved.break3Quotes.length >= 4,
+    '③ 破防池随 v10 一并写入：' + (saved.break3Quotes || []).length + ' 条');
+  ok(Array.isArray(saved.sulkQuotes) && saved.sulkQuotes.length >= 2,
+    '④ 摆烂池随 v10 一并写入：' + (saved.sulkQuotes || []).length + ' 条');
+  ok(Array.isArray(saved.recoverQuotes) && saved.recoverQuotes.length >= 2,
+    '撒娇池随 v10 一并写入：' + (saved.recoverQuotes || []).length + ' 条');
+  ok(saved.breakOn === true && saved.breakSulkOn === true, '破防模式 / 摆烂开关默认开启并落盘');
+  ok(saved.break2At < saved.break3At && saved.break3At < saved.break4At,
+    '档位门槛递增：' + saved.break2At + ' < ' + saved.break3At + ' < ' + saved.break4At);
 }
 
 console.log('');
@@ -382,10 +479,17 @@ if (tree) {
     for (let i = 0; i < frames; i++) {
       const q = rafQueue; rafQueue = [];
       nowMs += dtMs;
-      q.forEach((cb) => cb(nowMs));
+      q.forEach((cb) => { frameCount++; cb(nowMs); });   // [v15] 顺便数帧（性能自检用）
     }
   }
   const move = (x, y) => winListeners.get('mousemove').forEach((f) => f({ clientX: x, clientY: y, target: null }));
+
+  // [v15] 性能自检要"对齐心跳相位"：插件每 30 帧会放一帧过去（心跳），
+  // 所以测量前先把帧计数对齐到 30 的倍数，测出来的才是"纯静息"的开销。
+  function alignHeartbeat() {
+    const need = (30 - (frameCount % 30)) % 30;
+    for (let i = 0; i < need; i++) { nowMs += 16.7; pump(1, 16.7); }
+  }
 
   move(400, 300);
   pump(70, 16.7);              // 跑到 Q 弹衰减干净（TTL 640ms ≈ 38 帧）再量几何
@@ -613,9 +717,14 @@ if (tree) {
   ok(screamPool.filter((s) => /呜|哭|吐了|呆毛/.test(s)).length >= 4, '里面有「哭唧唧」系台词');
   ok(screamPool.indexOf(screamText) >= 0, '暴甩喊的是尖叫池里的句子：「' + screamText + '」', screamText);
   ok(screamSize > normalSize * 2, '尖叫字号明显变大（' + normalSize + 'px → ' + screamSize + 'px）');
+  // 字号规则（v14 起按公式验，不再拍脑袋定阈值）：
+  //   期望 = min(和鲸鱼娘一样高, 13 × 力度^1.25)，再按字数夹一次防顶出屏幕
   const capSize = META.ch * S * 0.95;
-  ok(screamSize > 90 && screamSize <= capSize + 0.5,
-    '尖叫字号很大且不超过"和她一样大"的上限（' + screamSize.toFixed(0) + 'px ≤ 上限 ' + capSize.toFixed(0) + 'px；长句会按字数自动收一点以免顶出屏幕）');
+  const capByWidth = (1920 * 0.9) / (String(screamText).length + 1);
+  const expectMax = Math.min(capSize, capByWidth);
+  ok(screamSize > normalSize * 2.5 && screamSize <= expectMax + 0.5,
+    '尖叫字号落在合理区间（' + screamSize.toFixed(0) + 'px；上限 min(身高 ' + capSize.toFixed(0)
+    + ', 屏幕宽度夹 ' + capByWidth.toFixed(0) + ') = ' + expectMax.toFixed(0) + 'px）');
 
   console.log('');
   console.log('[6] 平静之后补一句求饶/卖萌/生气');
@@ -690,9 +799,11 @@ if (tree) {
     // 从产物里把台词池读出来（顺便验证它真的被打包进去了）
     const raw = (code.match(/const IDLE_QUOTES = \[([\s\S]*?)\n\t\t\];/) || [, ''])[1];
     const pool = raw.split('\n').map((s) => (s.match(/'([^']+)'/) || [])[1]).filter(Boolean);
-    ok(pool.length === 20, '台词池 20 条', '实际 ' + pool.length + ' 条');
-    ok(pool.filter((s) => /空军|钓鱼佬|竿|钓/.test(s)).length >= 14, '绝大多数围绕钓鱼佬/空军/吊鲸鱼主题');
+    ok(pool.length >= 30, '台词池已扩容（≥30 条，v11 加了腹黑池）', '实际 ' + pool.length + ' 条');
+    ok(pool.filter((s) => /空军|钓鱼佬|竿|钓|鱼护|抛竿/.test(s)).length >= 14, '绝大多数围绕钓鱼佬/空军/吊鲸鱼主题');
     ok(pool.some((s) => /可爱|摸摸|卖萌|好不好|呀～|哦/.test(s)), '有卖萌系台词');
+    ok(pool.filter((s) => /数了下|小鱼问我|很努力的人|没有别的事|没发现自己是空军|遛鼠标|给你数|手速|专业钓鱼佬|很没用|看戏/.test(s)).length >= 8,
+      'v11 补了腹黑嘲讽池（≥8 条）');
 
     // 鼠标不动，等它自己开演（先跑 5 秒让上一次"平静台词"过掉）
     pump(300, 16.7);
@@ -756,7 +867,475 @@ if (tree) {
   } catch (e) {
     ok(false, '设置页渲染不抛异常', e.message);
   }
+  // ---------------------------------------------------------------- [9] v9 弹窗层级
+  // 用户 2026-09-18 反馈：点「会话重命名」后弹窗里的鱼竿被盖住，只能盲操。
+  // 根因：官方 Modal 是 createPortal 到 document.body（z-index:1000），
+  //       我们的宿主却挂在 shell.overlay 槽位里（深处 #root 祖先链，
+  //       祖先的 overflow:hidden / transform 之类会毁掉 fixed + 高 z-index）。
+  // 断言要点：宿主必须**真的搬到 body 下的顶层容器里**，且搬完不破坏既有行为。
+  console.log('');
+  console.log('[9] v9 弹窗层级：鱼竿层搬进 document.body 顶层容器');
+
+  const appRoot = fakeEl('div');
+  appRoot.id = 'root';
+  bodyEl.appendChild(appRoot);
+  const host0 = tree;                       // 渲染出来的 .dsh-rod-host
+  const whereBefore = host0.parentNode;     // 迷你渲染器给它挂的位置（= 槽位容器）
+  ok(whereBefore !== bodyEl, '（前置）宿主原本不在 body 下（模拟 shell.overlay 槽位）');
+  ok(host0.__dshLifted === true || host0.parentNode !== whereBefore,
+    '宿主已被搬出槽位（__dshLifted=' + host0.__dshLifted + '）');
+
+  const topEl = documentStub.getElementById('dsh-rod-cursor-top');
+  ok(!!topEl, '创建了顶层容器 #dsh-rod-cursor-top');
+  ok(!!topEl && host0.parentNode === topEl, '宿主现在的爹 = 顶层容器');
+  ok(!!topEl && topEl.parentNode === bodyEl, '顶层容器挂在 document.body 下（与弹窗同一层叠根）');
+  const topCss = String((topEl && topEl.style && topEl.style.cssText) || '');
+  ok(/z-index:\s*auto/.test(topCss), '容器自身 z-index:auto（不给自己造新的层叠上下文）');
+  ok(/pointer-events:\s*none/.test(topCss), '容器 pointer-events:none（不挡任何点击）');
+  ok(!!topEl && topEl.getAttribute('data-dsh-rod-top') === '1', '容器带 data-dsh-rod-top 标记（排查用）');
+
+  // 层级数值：我们 2147483000 > 官方 Modal 的 1000
+  const styleEl = documentStub.getElementById('dsh-rod-cursor-style');
+  ok(!!styleEl, '<style id="dsh-rod-cursor-style"> 已注入 head');
+  const cssText = (styleEl && styleEl.textContent) || '';
+  const zRod = /\.dsh-rod-host\s*\{[^}]*z-index:\s*(\d+)/.exec(cssText);
+  const Z_MODAL = 1000;   // 官方 Modal 容器：position:fixed; z-index:1000
+  ok(!!zRod && Number(zRod[1]) > Z_MODAL, '鱼竿层 z-index ' + (zRod ? zRod[1] : '?') + ' > 弹窗 ' + Z_MODAL);
+  ok(/\.dsh-rod-host\s*\{[^}]*pointer-events:\s*none/.test(cssText), '鱼竿层仍然 pointer-events:none（不挡操作）');
+  ok(/\.dsh-rod-host\s*\{[^}]*position:\s*fixed/.test(cssText), '鱼竿层仍然是 position:fixed（铺满视口）');
+
+  // 幂等：再搬一次不许出现重复节点
+  const kidsBefore = topEl.children.length;
+  const hook = win.__WHALE_ROD_TEST__;
+  ok(!!hook && typeof hook.liftHost === 'function' && hook.LIFT_ID === 'dsh-rod-cursor-top',
+    '暴露了 __WHALE_ROD_TEST__ 窄接口（供自检验证幂等/清理）');
+  try {
+    const moved2 = hook ? hook.liftHost(host0) : false;
+    ok(moved2 === false, '已在顶层容器里 → liftHost 返回 false（不做无用搬运）');
+    ok(host0.parentNode === topEl && topEl.children.length === kidsBefore,
+      '重复搬运是幂等的（容器里还是 ' + topEl.children.length + ' 个孩子）');
+    ok(hook.liftCount() === kidsBefore, 'liftCount() 读到的孩子数 = ' + hook.liftCount());
+  } catch (e) {
+    ok(false, '重复搬运不抛异常', e.message);
+  }
+
+  // 全屏兜底：没有选择器 API 时必须安静退化（不能因为读不到就崩）
+  try {
+    const evs = winListeners.get('fullscreenchange') || [];
+    ok(evs.length > 0, '注册了 fullscreenchange 监听（全屏兜底）');
+    evs.forEach((f) => f({}));
+    ok(true, 'fullscreenchange 回调在"没有选择器 API"的假 DOM 里也不抛异常');
+    ok(host0.parentNode === topEl, '全屏事件过后宿主仍在顶层容器里');
+  } catch (e) {
+    ok(false, 'fullscreenchange 回调不抛异常', e.message);
+  }
+
+  // ---------------------------------------------------------------- [10] v10 破防四档
+  // 破防机是关在 effect 闭包里的，所以 v10 在宿主上开了一扇窄门（__dshBreakTest）：
+  // 直接"记一次猛甩"来驱动 —— 比"真的拼手速甩鼠标 + 等真实时间"那种写法可靠得多。
+  console.log('');
+  console.log('[10] v10 破防四档：①晃晕 → ②求饶 → ③破防 → ④摆烂罢工');
+
+  const bk = tree.__dshBreakTest;
+  const save = win.__WHALE_ROD_TEST__ && win.__WHALE_ROD_TEST__.saveSettings;
+  const savedNow = () => JSON.parse(win.localStorage.getItem('dsh-whale-rod-cursor.settings') || '{}');
+  let MUTSET = Object.assign({}, OLD_SETTINGS, savedNow());
+  // [v13] 台词池判定：**直接问插件的活池子**（用户存档 + 已合并的默认台词）。
+  // 早先用 localStorage 里的旧存档判池子，会漏掉 v10+ 新增的台词 → 断言误判。
+  const livePools = () => (win.__WHALE_ROD_TEST__ && win.__WHALE_ROD_TEST__.pools) ? win.__WHALE_ROD_TEST__.pools() : savedNow();
+  const POOL_NAMES = [['②求饶', 'break2Quotes'], ['③破防', 'break3Quotes'], ['④脱钩', 'sulkQuotes'],
+    ['撒娇', 'recoverQuotes'], ['尖叫', 'screamQuotes'], ['普通', 'quotes'], ['平静', 'calmQuotes'], ['小剧场', 'idleQuotes']];
+  const poolOf = (text) => {
+    if (!text) return '';
+    const pools = livePools();
+    for (const [name, key] of POOL_NAMES) if ((pools[key] || []).indexOf(text) >= 0) return name;
+    return '?';
+  };
+  const lastText = () => String(bubble.textContent || '');
+  const setBubble = (v) => { bubble.textContent = v; };
+
+  ok(!!bk && typeof bk.yank === 'function' && typeof bk.state === 'function',
+    '宿主上开了窄门 __dshBreakTest（自检专用，运行时不用它）');
+
+  if (bk && save) {
+    try {
+      // 全套参数都显式设定，避免依赖默认值（默认值另有一组断言）
+      // 注意：窗口设得很大（20s）→ 各阶段之间不会被滚动窗口踢掉，断言才稳
+      save({ breakWindowMs: 20000, break2At: 2, break3At: 4, break4At: 6,
+        break2CoolMs: 1000, break3CoolMs: 1000, break4CoolMs: 5000, sulkMs: 60000, shakeMs: 1000 });
+      MUTSET = Object.assign({}, MUTSET, savedNow());
+      nowMs += 60000; pump(3, 16.7);     // 时间往前走远：所有冷却过期、档位归零
+
+      // ---- ① 晃晕：只记一次，不够 ② 的门槛 ----
+      setBubble('');
+      bk.yank();
+      ok(bubble.textContent === '' && bk.state().tier === 0,
+        '① 晃晕档只计计数、不额外说话（tier=' + bk.state().tier + '，计数 ' + bk.state().count + '）');
+
+      // ---- ② 求饶 ----
+      bk.yank();     // 第 2 次 = 到 ② 门槛
+      ok(poolOf(lastText()) === '②求饶', '② 求饶档：「' + lastText() + '」');
+      ok(parseFloat(bubble.style.fontSize) > 13, '求饶台词字号比平时大（' + bubble.style.fontSize + '）');
+      ok(bk.state().tier === 2, '② 档 → tier=' + bk.state().tier);
+
+      setBubble('');
+      bk.yank();     // 第 3 次：② 冷却中，且没到 ③ 门槛 → 不说话
+      ok(bubble.textContent === '', '② 档冷却中不重复说（不刷屏）');
+
+      // ---- ③ 破防 ----
+      setBubble('');
+      bk.yank();     // 第 4 次 = 到 ③ 门槛
+      ok(poolOf(lastText()) === '③破防', '③ 破防档骂人了：「' + lastText() + '」');
+      ok(bk.state().tier === 3, '③ 档 → tier=' + bk.state().tier);
+      ok(bk.state().shaking === true, '③ 档开始发抖（剩 ' + bk.state().shakeLeftMs + 'ms）');
+
+      pump(1, 16.7);   // 让发抖生效
+      const tf = whaleG.getAttribute('transform');
+      ok(typeof tf === 'string' && /^translate\(-?[\d.]+,-?[\d.]+\) rotate\(-?[\d.]+\) scale\(/.test(tf),
+        '③ 档发抖只是渲染层微位移，transform 结构没被算坏');
+
+      // ---- ④ 摆烂 ----
+      setBubble('');
+      bk.yank();     // 第 5 次：还没到 ④ 门槛
+      ok(bk.state().sulking === false && bk.state().tier === 3,
+        '④ 门槛前不摆烂（计数 ' + bk.state().count + ' < ' + MUTSET.break4At + '）');
+      bk.yank();     // 第 6 次 = 到 ④ 门槛
+      const st4 = bk.state();
+      ok(st4.sulking === true && st4.tier === 4, '④ 摆烂档触发（tier=' + st4.tier + '，装死中）');
+      ok(poolOf(lastText()) === '④脱钩', '罢工宣言：「' + lastText() + '」');
+
+      pump(1, 16.7);   // 跑一帧，让虚线绳的 class 落上去
+      ok(!!line && line.classList.contains('dsh-rod-line-slack'), '线先是"松了"的虚线（class dsh-rod-line-slack）');
+      ok(/\.dsh-rod-line-slack\s*\{[^}]*stroke-dasharray/.test(cssText), '虚线样式确实注入了 <style>');
+
+      // ---- [v12] 真脱钩：线整条藏掉 + 竿尖留断线头 + 她往下沉 + 你怎么甩都拉不动 ----
+      const svgEl = tree.children.find((c) => c.tagName === 'SVG');
+      const mainLine = (svgEl.children || []).find((c) => c.className === 'dsh-rod-line');
+      const stubLine = (svgEl.children || []).find((c) => /dsh-rod-stub/.test(c.className || ''));
+      const yOf = () => parseFloat((/translate\((-?[\d.]+),(-?[\d.]+)\)/.exec(whaleG.getAttribute('transform')) || [, '', ''])[2]);
+      const xOf = () => parseFloat((/translate\((-?[\d.]+),/.exec(whaleG.getAttribute('transform')) || [, ''])[1]);
+      ok(!!stubLine, '[v12] 渲染出了"断线头"元素（dsh-rod-stub）');
+      ok(MUTSET.sulkDetach === true, '[v12] 设置里 sulkDetach 默认开启（真脱钩）');
+      ok(!!mainLine && mainLine.classList.contains('dsh-rod-line-gone'),
+        '[v12] 脱钩：整条鱼线淡出（class dsh-rod-line-gone）—— "钩子空了"');
+      ok(((stubLine && stubLine.style && stubLine.style.display) || '') !== 'none', '[v12] 断线头显示出来（挂在竿尖晃）');
+      ok(/\.dsh-rod-line-gone\s*\{[^}]*opacity:\s*0/.test(cssText), '[v12] 淡出样式已注入');
+
+      // 先"复位"：结束这次摆烂（用窄门，不等真时长）+ 等摆烂冷却过期
+      bk.endSulk(); pump(2, 16.7);
+      nowMs += MUTSET.break4CoolMs + 200; pump(3, 16.7);   // 等冷却
+      setBubble('');                                        // 清掉罢工宣言，才好验证"脱钩期间不吭声"
+      move(700, 120); pump(10, 16.7);                        // 让她先正常悬挂在屏幕上方
+
+      // 步骤①：正常状态下，鼠标移动 → 她**会被拉着走**（对照组，证明"脱钩后拉不动"是真差别）
+      move(200, 200); for (let i = 0; i < 25; i++) { nowMs += 16.7; pump(1, 16.7); }
+      const nearNormal = Math.hypot(200 - xOf(), 200 - yOf());
+      ok(nearNormal < 260, '（对照组）没脱钩时她是跟着鼠标走的（离鼠标 ≈' + nearNormal.toFixed(0) + 'px）');
+
+      // 复位到上方，准备进第二次摆烂
+      move(700, 120); for (let i = 0; i < 50; i++) { nowMs += 16.7; pump(1, 16.7); }
+      const yStart = yOf();
+      let again = false;
+      for (let i = 0; i < 12 && !again; i++) { nowMs += 16.7; bk.yank(); again = bk.state().sulking; }
+      ok(again === true, '[v12] 等冷却过后能再进一次摆烂（用于验证脱钩行为）');
+
+      // 步骤②：脱钩期间，鼠标不动 → 她自己往下沉
+      pump(2, 16.7);
+      setBubble('');
+      const textAtSulkEntry = bubble.textContent;
+      for (let i = 0; i < 90; i++) { nowMs += 16.7; pump(1, 16.7); }
+      const textAfterDrift = bubble.textContent;
+      const yEnd = yOf();
+      ok(isFinite(yStart) && isFinite(yEnd) && yEnd > yStart + 40,
+        '[v12] 脱钩后她自己在往下沉（鼠标没动：y ' + yStart.toFixed(0) + ' → ' + yEnd.toFixed(0) + '）');
+
+      // 步骤③：脱钩期间，鼠标瞬移 + 甩动 → 拉不动她、且不再冒新的台词
+      const textAtEntry2 = bubble.textContent;
+      (winListeners.get('mouseleave') || []).forEach((f) => f({}));
+      (winListeners.get('mouseenter') || []).forEach((f) => f({}));
+      move(200, 200); move(210, 205);
+      const sulkingRightAfter = bk.state().sulking;
+      for (let i = 0; i < 25; i++) { nowMs += 16.7; pump(1, 16.7); }
+      const distToMouse = Math.hypot(200 - xOf(), 200 - yOf());
+      ok(sulkingRightAfter === true, '[v12] 鼠标瞬移的瞬间她仍在脱钩状态');
+      ok(distToMouse > 120,
+        '[v12] 鼠标瞬移 + 甩动都拉不动她（离鼠标 ≈' + distToMouse.toFixed(0) + 'px）');
+      const saidNow = bubble.textContent;
+      const noNewScream = saidNow === textAtEntry2 || poolOf(saidNow) === '普通' || poolOf(saidNow) === '尖叫';
+      ok(noNewScream || poolOf(saidNow) === '④脱钩',
+        '[v12] 脱钩期间没有新台词（进场=「' + textAtEntry2 + '」 现在=「' + saidNow + '」 池=' + poolOf(saidNow) + '）');
+      // 收尾：用窄门结束摆烂，后面的用例从干净状态开始
+      bk.endSulk(); pump(2, 16.7);
+      nowMs += MUTSET.break4CoolMs + 200;
+      nowMs += MUTSET.break3CoolMs + 200;
+      nowMs += MUTSET.break2CoolMs + 200;
+      pump(3, 16.7);
+      setBubble('');
+      while (bk.state().sulking) { nowMs += 200; pump(2, 16.7); }   // 收尾：让摆烂演完
+
+      // 装死期间：怎么甩都不出声，计数也不涨（此时她一定在 sulking）
+      let sulkAgain2 = false;
+      for (let i = 0; i < 12 && !sulkAgain2; i++) { nowMs += 16.7; bk.yank(); sulkAgain2 = bk.state().sulking; }
+      ok(sulkAgain2 === true, '能再次进摆烂（用于验证"装死期间不吭声"）');
+      pump(2, 16.7);
+      const cnt0 = bk.state().count;
+      const textBefore = bubble.textContent;
+      for (let i = 0; i < 5; i++) { nowMs += 16.7; pump(1, 16.7); bk.yank(); }
+      ok(bubble.textContent === textBefore, '装死期间怎么甩都不出声（气泡一个字没变）');
+      ok(bk.state().count === cnt0 && bk.state().sulking === true, '装死期间连"猛甩计数"都不涨（不升不降）');
+
+      // ---- 装死到点：她回来了（用窄门结束，不等真时长） ----
+      bk.endSulk();
+      pump(2, 16.7);
+      ok(bk.state().sulking === false, '装死到点自动结束（tier 归零）');
+      ok(poolOf(lastText()) === '撒娇', '回来撒娇一句：「' + lastText() + '」');
+      ok(!!mainLine && !mainLine.classList.contains('dsh-rod-line-gone'),
+        '[v12] 线接回来了（淡出 class 摘掉）');
+      ok(((stubLine && stubLine.style && stubLine.style.display) || '') === 'none', '[v12] 断线头收起来了');
+      setBubble('');
+
+      // ---- [v13] 防回归：这一下"刚好触发脱钩"时，不许先蹦一句普通/尖叫台词再蹦罢工宣言 ----
+      // 用户报的原话：「触发了"放我下来"之类的台词，是不是断线状态台词混淆」
+      // 根因：老顺序是"先冒泡（说普通/尖叫）→ 再记猛甩（可能当场脱钩）"，
+      //       于是那一鞭会连说两句、且**后写的那句未必最后被看见**（普通句 hold 1800ms > 罢工句 4000ms 的显示时长虽长，
+      //       但若普通句在罢工句之后写入，屏幕上就是"没断线"的台词）→ 看着像串台。
+      // 这里**不清空气泡**，直接看"最后一鞭之后屏幕上显示的是哪句"，才等于用户看到的事实。
+      bk.endSulk(); pump(2, 16.7);
+      nowMs += 60000;                          // 所有冷却过期
+      bk.reset();
+      save({ break2At: 2, break3At: 3, break4At: 4, break4CoolMs: 0, break3CoolMs: 0, break2CoolMs: 0 });
+      MUTSET = Object.assign({}, MUTSET, savedNow());
+      pump(3, 16.7);
+      const shown = [];
+      for (let i = 0; i < 4; i++) {
+        nowMs += 700;
+        bk.popBubble(5);                        // 4 次真实冒泡 → 第 4 次应当触发脱钩
+        pump(1, 16.7);
+        shown.push(poolOf(bubble.textContent) + '「' + bubble.textContent + '」');
+      }
+      const lastShown = bubble.textContent;
+      ok(bk.state().sulking === true, '[v13] 第 4 鞭确实触发了脱钩（前置）');
+      ok(poolOf(lastShown) === '④脱钩',
+        '[v13] 触发脱钩后屏幕上显示的是"罢工宣言"（实际=「' + lastShown + '」）  序列: ' + shown.join(' → '));
+      ok(poolOf(lastShown) !== '普通' && poolOf(lastShown) !== '尖叫' && poolOf(lastShown) !== '②求饶',
+        '[v13] 断线瞬间不会再串出「快放我下来」这类"还没断线"的台词');
+      // 更要紧的一条：**脱钩那一鞭只说一句** —— 不许"先骂一句 ③ 再断钩"
+      // （序列里第 4 项 = 脱钩那一鞭；只要它是 ④脱钩，就说明这一鞭没多说别的）
+      const shots = shown.map((s) => s.slice(0, s.indexOf('「')));
+      ok(shots[shots.length - 1] === '④脱钩' && shots[shots.length - 2] !== '③破防',
+        '[v13] 脱钩那一鞭只说"罢工宣言"（不先骂一句再断钩）  序列: ' + shown.join(' → '));
+      bk.endSulk(); pump(2, 16.7);
+      save({ break2At: 2, break3At: 4, break4At: 6, break4CoolMs: 5000 });
+      MUTSET = Object.assign({}, MUTSET, savedNow());
+
+      // ---- [v14] 用户实测两条：①鼠标不许在"宕机期"操纵她左右 ②沉底要整身可见 ----
+      // ① 根因：物理里的 rvy 含 -mvy（鼠标速度），脱钩时它照样把鼠标动作渗进她的运动。
+      // ② 根因：边界只让"头顶"贴到屏幕下沿 → 只露三分之一脑袋。
+      bk.endSulk(); pump(2, 16.7);
+      nowMs += 60000; bk.reset();
+      save({ break2At: 2, break3At: 3, break4At: 4, break4CoolMs: 0, break3CoolMs: 0, break2CoolMs: 0, sulkMs: 60000 });
+      MUTSET = Object.assign({}, MUTSET, savedNow());
+      pump(3, 16.7);
+      move(700, 150); pump(5, 16.7);
+      let entered14 = false;
+      for (let i = 0; i < 6 && !entered14; i++) { nowMs += 700; bk.popBubble(5); entered14 = bk.state().sulking; }
+      ok(entered14 === true, '[v14] 先进入脱钩（前置）');
+      pump(3, 16.7);
+      for (let i = 0; i < 90; i++) { nowMs += 16.7; pump(1, 16.7); }   // 等她自己沉到底
+      const x0 = xOf();
+      for (let k = 0; k < 20; k++) { move(k % 2 ? 200 : 1700, 300); nowMs += 16.7; pump(1, 16.7); }  // 鼠标大幅横跳
+      const x1 = xOf();
+      ok(Math.abs(x1 - x0) < 8,
+        '[v14] 脱钩宕机期鼠标怎么横跳都不"牵"她（Δx=' + (x1 - x0).toFixed(1) + 'px）');
+
+      const m14 = bk.meta ? bk.meta() : { ch: 170, scale: 0.72 };
+      const bodyH14 = m14.ch * (m14.scale || 0.72);
+      let lowest = -1e9;
+      for (let i = 0; i < 150; i++) { nowMs += 16.7; pump(1, 16.7); lowest = Math.max(lowest, yOf()); }
+      ok(lowest + bodyH14 <= 1080 + 0.5,
+        '[v14] 沉底时整个身子都在屏内（头顶最低 ' + lowest.toFixed(0) + ' + 身高 ' + bodyH14.toFixed(0)
+        + ' = ' + (lowest + bodyH14).toFixed(0) + ' ≤ 视口 1080）');
+      let hi = 1e9, lo = -1e9;
+      for (let i = 0; i < 150; i++) { nowMs += 16.7; pump(1, 16.7); const y = yOf(); hi = Math.min(hi, y); lo = Math.max(lo, y); }
+      const bob = lo - hi;
+      ok(bob >= 2 && bob <= 40, '[v14] 沉底后有轻微"浮在水里"的上下晃（幅度 ' + bob.toFixed(1) + 'px）');
+      bk.endSulk(); pump(2, 16.7);
+      nowMs += 60000; pump(3, 16.7);
+      // 收尾：把后面的用例需要的前置状态还原（否则会污染 ④ 冷却那几条断言）
+      save({ break2At: 2, break3At: 4, break4At: 6, break4CoolMs: 5000, breakWindowMs: 20000,
+        break2CoolMs: 1000, break3CoolMs: 1000, sulkMs: 60000 });
+      MUTSET = Object.assign({}, MUTSET, savedNow());
+      bk.reset();
+      nowMs += 60000; pump(3, 16.7);
+      // 特意再进一次脱钩、用窄门结束 → 把"刚脱钩"的 5s 冷却状态摆好，供后面断言使用
+      setBubble('');
+      let pre = false;
+      for (let i = 0; i < 12 && !pre; i++) { nowMs += 16.7; bk.yank(); pre = bk.state().sulking; }
+      ok(pre === true, '[v14] 收尾：重新进入一次脱钩（为后续"冷却期内不脱钩"断言摆好前置）');
+      bk.endSulk(); pump(2, 16.7);
+
+      // ---- ④ 冷却：冷却期内够次数也不再摆烂 ----
+      save({ break4CoolMs: 60000, breakWindowMs: 60000 });
+      MUTSET = Object.assign({}, MUTSET, savedNow());
+      setBubble('');
+      let sulkedAgain = false;
+      for (let i = 0; i < 20; i++) { bk.yank(); if (bk.state().sulking) { sulkedAgain = true; break; } }
+      ok(sulkedAgain === false, '④ 冷却 60s 内再连甩也不会摆烂（tier=' + bk.state().tier + '）');
+      // [v12] 冷却期内的降级：能到 ③ 就骂人，不能就退回 ②/普通 —— 关键是不能摆烂
+      // ⚠️ 这里**不要**再推进时钟：④ 的冷却就是"刚摆完"的 60s，推了就过期了（自检里翻过车）
+      save({ break4CoolMs: 60000, break3CoolMs: 1000, break2CoolMs: 1000 });
+      MUTSET = Object.assign({}, MUTSET, savedNow());
+      bk.reset();
+      nowMs += 1500; pump(3, 16.7);        // 只让 ②③ 的小冷却过期（远小于 ④ 的 60s）
+      setBubble('');
+      let sulked3 = false;
+      for (let i = 0; i < 20 && !sulked3; i++) { nowMs += 16.7; bk.yank(); sulked3 = bk.state().sulking; }
+      ok(sulked3 === false, '④ 冷却 60s 内再连甩也不会摆烂（tier=' + bk.state().tier + '）');
+      ok(bk.state().tier >= 2 && poolOf(lastText()) !== '④脱钩',
+        '冷却期内降级到 ②/③ 处理（tier=' + bk.state().tier + '，气泡池=' + poolOf(lastText()) + '）');
+
+      // ---- 总开关 ----
+      save({ breakOn: false });
+      setBubble('');
+      for (let i = 0; i < 25; i++) bk.yank();
+      ok(bubble.textContent === '' && bk.state().sulking === false,
+        '破防模式关闭后：连甩也不会说破防台词、不会摆烂');
+      save({ breakOn: true });
+
+      // ----------------------------------------------------------------
+      // [v11] 用户实测反馈的两条，必须防回归：
+      //   ①「一直试不出摆烂」→ 计数必须是**滚动窗口**（歇口气不清零）
+      //   ②「破防后一直抖动不停」→ 发抖必须**限时**
+      // ----------------------------------------------------------------
+      console.log('');
+      console.log('[10.5] v11 修正：滚动窗口计数 + 发抖限时 + 腹黑台词');
+
+      save({ breakWindowMs: 2000, break2At: 2, break3At: 4, break4At: 6,
+        break2CoolMs: 1000, break3CoolMs: 1000, break4CoolMs: 2000, sulkMs: 800, shakeMs: 1500 });
+      MUTSET = Object.assign({}, MUTSET, savedNow());
+      // 干净隔离：先让"上一段遗留的鼠标速度"在物理里衰减掉（否则 pump 时物理循环会
+      // 误判成一次猛甩 → 同一毫秒被记两笔，滚动窗口断言就会飘）
+      (winListeners.get('mouseleave') || []).forEach((f) => f({}));
+      (winListeners.get('mouseenter') || []).forEach((f) => f({}));
+      move(700, 500);
+      for (let i = 0; i < 60; i++) { nowMs += 16.7; pump(1, 16.7); }
+      pump(5, 16.7);
+      bk.reset();                                  // 清干净计数（上一段留下的残留不算）
+      nowMs += 120000; pump(3, 16.7);             // 时间往前走远：让所有冷却过期、档位归零
+      bk.reset();                                  // 冷却检查也可能把档位改掉，再清一次
+      setBubble('');
+      bk.yank();
+      const cntA = bk.state().count;
+      ok(cntA === 1 && bk.state().tier <= 1 && bubble.textContent === '',
+        '① 第 1 次猛甩 → 计数 1、不升档、不说话（tier=' + bk.state().tier + '）');
+      nowMs += MUTSET.breakWindowMs - 500; pump(1, 16.7);   // 歇口气，但没超过窗口（不 reset！）
+      bk.yank();
+      ok(cntA === 1 && bk.state().count === 2,
+        '① 窗口内"歇口气"后继续甩 → 计数继续累加到 2（老写法会清零 → 摆烂永远试不出来）');
+      let hit4 = false;
+      for (let i = 0; i < 12 && !hit4; i++) { bk.yank(); hit4 = bk.state().sulking; }
+      ok(hit4 === true, '① 摆烂能试出来了（窗口内累计 ' + MUTSET.break4At + ' 次即可，不用一口气甩 7 秒）');
+      ok(bk.state().tier === 4 && bk.state().shaking === true, '① 摆烂期间处于发抖状态（微颤）');
+
+      nowMs += MUTSET.sulkMs + 100; pump(2, 16.7);          // 装死结束
+      ok(bk.state().sulking === false, '② 装死到点结束');
+      ok(bk.state().shaking === false, '② 她"回来"时是安静的（不发抖）—— 归来是撒娇，不是继续生气');
+      nowMs += MUTSET.shakeMs + 300; pump(3, 16.7);
+      ok(bk.state().shaking === false, '② 抖够 shakeMs 后**停止发抖**（用户报的"一直抖不停"已修）');
+
+      // 关键回归：③ 破防后**停手** → 抖一阵就停，不会抖到天荒地老
+      save({ breakWindowMs: 2000, break2At: 2, break3At: 3, break4At: 99, break3CoolMs: 500, shakeMs: 1200 });
+      MUTSET = Object.assign({}, MUTSET, savedNow());
+      nowMs += 30000; pump(3, 16.7);
+      bk.yank(); bk.yank(); bk.yank();
+      ok(bk.state().tier === 3 && bk.state().shaking === true, '② 刚到 ③ 破防档：在抖（剩 ' + bk.state().shakeLeftMs + 'ms）');
+      for (let i = 0; i < 6; i++) { nowMs += 500; pump(2, 16.7); }   // 停手 3 秒（不超窗口）
+      ok(bk.state().shaking === false, '② 停手后抖够了就停（shaking=false，不再"一直抖动不停"）');
+
+      // 档位回归：停手超过窗口 → 档位归零（不会永久带着破防档）
+      save({ breakWindowMs: 1000, break2At: 2, break3At: 3, break4At: 99, break3CoolMs: 500 });
+      MUTSET = Object.assign({}, MUTSET, savedNow());
+      nowMs += 20000; pump(3, 16.7);
+      bk.yank(); bk.yank(); bk.yank();
+      ok(bk.state().tier === 3, '③ 又甩到破防档（tier=' + bk.state().tier + '）');
+      nowMs += MUTSET.breakWindowMs + 500; pump(3, 16.7);
+      ok(bk.state().tier === 0, '③ 停手超过判定窗口 → 档位归零（tier=' + bk.state().tier + '）');
+
+      // 腹黑台词（用户要求"腹黑嘲讽不够多"）
+      const idlePool = MUTSET.idleQuotes || [];
+      const darkHit = (s) => /数了下|小鱼问我|很努力的人|没有别的事|没发现自己是空军|遛鼠标|给你数|手速|专业钓鱼佬|很没用|看戏/.test(s);
+      const dark = idlePool.filter(darkHit);
+      ok(idlePool.length >= 30, '④ 闲置小剧场扩到 ' + idlePool.length + ' 条（v11 加了腹黑池）');
+      ok(dark.length >= 8, '④ 其中腹黑嘲讽 ' + dark.length + ' 条，例如：「' + (dark[0] || '') + '」');
+      const calmPool = MUTSET.calmQuotes || [];
+      const calmDark = calmPool.filter((s) => /小本本|该不该咬线|等你空军|次数我记着|一句话都不说/.test(s));
+      ok(calmDark.length >= 4, '④ 平静台词也补了腹黑：' + calmPool.length + ' 条里含 ' + calmDark.length + ' 条');
+      ok(MUTSET.shakeMs >= 300 && MUTSET.shakeMs <= 8000, '④ 发抖时长可调且落盘（' + MUTSET.shakeMs + 'ms）');
+    } catch (e) {
+      ok(false, '破防四档全程不抛异常', e.stack);
+    }
+  }
+
+  // ---------------------------------------------------------------- [11] v15 性能
+  // 用户要求：「这是鼠标，不能影响鼠标的"性能"为优先级」+「最好不要有循环占用和无限计数」。
+  // 这里用假 DOM 的写入计数器把"静息期几乎不写 DOM"这件事**量出来**，
+  // 并把"无界增长"逐个钉死。
+  console.log('');
+  console.log('[11] v15 性能：静息期工作量 / 状态封顶 / 无循环占用');
+
+  try {
+    // 先回落到"能进静息快车道"的状态：attach 模式（tx 不必等于鼠标）+ 不抖 + 不演出
+    bk.endSulk(); pump(2, 16.7);
+    nowMs += 60000; bk.reset(); pump(3, 16.7);
+    save({ mode: 'attach', poseSource: 'dsh', sulkMs: 60000, shakeMs: 300, powerOn: undefined });
+    move(900, 400);
+    for (let i = 0; i < 180; i++) { nowMs += 16.7; pump(1, 16.7); }   // 让她彻底静下来
+
+    // ① 静息 120 帧：DOM 写入应该接近于 0
+    alignHeartbeat();                       // 对齐到心跳边界，测的才是纯静息开销
+    DOMSTAT.reset();
+    for (let i = 0; i < 120; i++) { nowMs += 16.7; pump(1, 16.7); }
+    const idleWrites = DOMSTAT.total;
+    ok(idleWrites <= 12,
+      '① 静息 120 帧只有 ' + idleWrites + ' 次 DOM 写入（快车道生效：理论上限 = 心跳 4 帧 × 5 处 ≈ 12）');
+
+    // ② 鼠标每帧都在动：必须正常干活（该写就写）
+    DOMSTAT.reset();
+    for (let i = 0; i < 120; i++) { move(600 + (i % 40) * 20, 300 + (i % 30) * 8); nowMs += 16.7; pump(1, 16.7); }
+    const activeWrites = DOMSTAT.total;
+    console.log('    静息 120 帧 ' + idleWrites + ' 次写入  vs  鼠标狂动 120 帧 ' + activeWrites + ' 次写入');
+    ok(activeWrites >= 120, '② 鼠标在动时照样逐帧渲染（120 帧写了 ' + activeWrites + ' 次）');
+    ok(activeWrites > idleWrites * 8, '③ 静息开销远小于活动开销（' + idleWrites + ' vs ' + activeWrites + '）');
+
+    // ④ 计数封顶：猛甩 200 次，内部时刻数组不许长过 64（"无界计数"钉死）
+    save({ breakOn: true, breakSulkOn: false, breakWindowMs: 2000, break2At: 2, break3At: 4, break4At: 6 });
+    bk.reset(); nowMs += 60000;
+    for (let i = 0; i < 200; i++) { nowMs += 10; bk.yank(); }
+    const cl = bk.clocks();
+    ok(cl.times.length <= 64, '④ 猛甩 200 次后内部时刻数组 ' + cl.times.length + ' 项（上限 64，不会无界增长）');
+    ok(cl.count === cl.times.length, '④ 计数 = 时刻数组长度（两者始终一致，不会漂）');
+
+    // ⑤ 无循环占用：800ms 轮询只在"订阅拿不到"时才起（订阅可用时不该有常驻定时器）
+    const pollTimers = win.setInterval._calls || 0;
+    ok(pollTimers === 0,
+      '⑤ 订阅可用时**没有**常驻 setInterval（轮询兜底只在订阅失效时才启；本会话共起过 ' + pollTimers + ' 个）');
+
+    // ⑥ 事件监听器不重复注册（组件反复挂载也不该累积）
+    const mm = (winListeners.get('mousemove') || []).length;
+    ok(mm <= 2, '⑥ mousemove 监听器只有 ' + mm + ' 个（重复注册会让每次移动做多份工作）');
+
+    // ⑦ 台词池数组也各有上限（不会越说越长）
+    ok((win.__WHALE_ROD_TEST__.pools().idleQuotes || []).length <= 200,
+      '⑦ 台词池长度受存档限制（不会在运行中无限追加）');
+  } catch (e) {
+    ok(false, '性能自检不抛异常', e.stack);
+  }
+
+  // 卸载：宿主还给原位置 + 空容器不留在 body 上
   cleanups.forEach((c) => { try { c(); } catch (e) { /* ignore */ } });
+  ok(host0.parentNode === whereBefore || host0.parentNode === null,
+    '卸载后宿主已从顶层容器里交还给 React 原位置');
+  ok(documentStub.getElementById('dsh-rod-cursor-top') === null, '空掉的顶层容器被清理（body 上不留垃圾）');
   ok(!documentStub.documentElement.classList.contains('dsh-rod-cursor-none'), '组件卸载后系统光标仍然可见（安全网）');
 }
 

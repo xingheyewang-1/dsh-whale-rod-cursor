@@ -25,18 +25,24 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const ROOT = 'F:/DSH_Workspace/tools/dsh-whale-rod-cursor';
-const SRC = ROOT + '/lib/client.src.js';
-const OUT = ROOT + '/lib/client.js';
-const PREV = ROOT + '/.build-cache/client.js.prev';
-const META_OUT = ROOT + '/lib/whale-anchor.json';
-const JIMP = 'F:/DSH_Workspace/tools/imgtool/node_modules/jimp';
+// [v15.1] 路径不再写死 H 盘：由 lib/portable-paths.cjs 按"脚本自身位置"推出来，
+// 所以工作区搬到 F 盘（或别的盘）后，构建/自检/安装/发布全部照常可用。
+const PP = require('./lib/portable-paths.cjs');
+
+const ROOT = PP.PLUGIN_DIR;
+const SRC = PP.SRC;
+const OUT = PP.OUT;
+const PREV = PP.BUILD_CACHE + '/client.js.prev';
+const PREV_DIR = PP.BUILD_CACHE;
+const SRC_TEST = ROOT + '/smoke-test.cjs';
+const META_OUT = PP.META_OUT;
+const JIMP = PP.JIMP;
 
 // 姿态包：key 就是源码里用的姿态名
 const ASSETS = {
-  idle: { file: 'F:/DSH_Workspace/ref/cursor-candidates/keyed-idle.png', label: '平时' },
-  work: { file: 'F:/DSH_Workspace/ref/cursor-candidates/keyed-work.png', label: '在忙' },
-  done: { file: 'F:/DSH_Workspace/ref/cursor-candidates/keyed-done.png', label: '干完了' },
+  idle: { file: PP.ASSETS.idle, label: '平时' },
+  work: { file: PP.ASSETS.work, label: '在忙' },
+  done: { file: PP.ASSETS.done, label: '干完了' },
 };
 
 if (!fs.existsSync(SRC)) { console.log('✗ 找不到源码 ' + SRC); process.exit(1); }
@@ -149,6 +155,31 @@ async function measureOne(file) {
     } catch (e) { console.log('⚠ 未能写入回滚点：' + e.message); }
   }
   fs.writeFileSync(OUT, js, 'utf8');
+
+  // 源码也留一份干净副本：2026-09-18 惨案（用 PowerShell 往返改 smoke-test.cjs，
+  // 中文被 GBK 化且**不可逆丢字节**，最后靠 9/15 的发布包才救回来）—— 别再依赖运气。
+  try {
+    fs.mkdirSync(PREV_DIR, { recursive: true });
+    for (const f of [SRC, SRC_TEST]) {
+      if (fs.existsSync(f)) fs.copyFileSync(f, path.join(PREV_DIR, path.basename(f) + '.bak'));
+    }
+  } catch (e) { console.log('⚠ 未能写入源码备份：' + e.message); }
+
+  // BOM 体检：本项目的 .ps1 全是"含中文 + 双击运行"，无 BOM 时 PowerShell 5.1 会按 GBK
+  // 读 → 中文乱码 → 引号截断 → 窗口闪一下就关（踩过两次：v7 一次、2026-09-19 又一次，
+  // 因为 edit/write 工具会**剥掉 BOM**）。这里每次构建顺手检查并自动补回。
+  try {
+    const BOM = Buffer.from([0xEF, 0xBB, 0xBF]);
+    for (const name of fs.readdirSync(ROOT)) {
+      if (!name.toLowerCase().endsWith('.ps1')) continue;
+      const full = path.join(ROOT, name);
+      const buf = fs.readFileSync(full);
+      if (!buf.slice(0, 3).equals(BOM)) {
+        fs.writeFileSync(full, Buffer.concat([BOM, buf]));
+        console.log('  · 已补 BOM：' + name + '（之前丢了会导致双击闪退）');
+      }
+    }
+  } catch (e) { console.log('⚠ BOM 体检失败：' + e.message); }
 
   const sidecar = { poses: {} };
   for (const key of Object.keys(ASSETS)) {
