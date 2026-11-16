@@ -348,7 +348,7 @@ ok(Array.isArray(exportsObj.inject) && exportsObj.inject.includes('slots'), "inj
 ok(typeof exportsObj.apply === 'function', 'apply 是函数');
 const VER = win.__WHALE_ROD_CURSOR_VER__;
 ok(typeof VER === 'string' && /^\d{4}-\d{2}-\d{2}-v\d+/.test(VER), '版本戳已写入并符合命名规范：' + VER, VER);
-ok(VER && VER.includes('v15'), '版本戳是 v15（本次改动生效的那版）', VER);
+ok(VER && VER.includes('v16'), '版本戳是 v16（portal 修复生效的那版）', VER);
 ok(documentStub.getElementById('dsh-rod-cursor-style') !== null, '样式已注入 <style id="dsh-rod-cursor-style">');
 
 console.log('');
@@ -882,12 +882,13 @@ if (tree) {
   const host0 = tree;                       // 渲染出来的 .dsh-rod-host
   const whereBefore = host0.parentNode;     // 迷你渲染器给它挂的位置（= 槽位容器）
   ok(whereBefore !== bodyEl, '（前置）宿主原本不在 body 下（模拟 shell.overlay 槽位）');
-  ok(host0.__dshLifted === true || host0.parentNode !== whereBefore,
-    '宿主已被搬出槽位（__dshLifted=' + host0.__dshLifted + '）');
+  // [portal 2026-11-16] 设计已换：宿主**不再搬家**（搬 React 节点会在提交阶段抛 removeChild）
+  ok(host0.__dshLifted === false, '宿主不再被搬家（__dshLifted=' + host0.__dshLifted + '）');
+  ok(host0.parentNode === whereBefore, '宿主仍留在槽位里（节点所有权交给 React portal）');
 
   const topEl = documentStub.getElementById('dsh-rod-cursor-top');
   ok(!!topEl, '创建了顶层容器 #dsh-rod-cursor-top');
-  ok(!!topEl && host0.parentNode === topEl, '宿主现在的爹 = 顶层容器');
+  ok(!!topEl && documentStub.getElementById('dsh-rod-cursor-top') === topEl, '顶层容器就绪（作为 React portal 的宿主）');
   ok(!!topEl && topEl.parentNode === bodyEl, '顶层容器挂在 document.body 下（与弹窗同一层叠根）');
   const topCss = String((topEl && topEl.style && topEl.style.cssText) || '');
   ok(/z-index:\s*auto/.test(topCss), '容器自身 z-index:auto（不给自己造新的层叠上下文）');
@@ -911,12 +912,11 @@ if (tree) {
     '暴露了 __WHALE_ROD_TEST__ 窄接口（供自检验证幂等/清理）');
   try {
     const moved2 = hook ? hook.liftHost(host0) : false;
-    ok(moved2 === false, '已在顶层容器里 → liftHost 返回 false（不做无用搬运）');
-    ok(host0.parentNode === topEl && topEl.children.length === kidsBefore,
-      '重复搬运是幂等的（容器里还是 ' + topEl.children.length + ' 个孩子）');
-    ok(hook.liftCount() === kidsBefore, 'liftCount() 读到的孩子数 = ' + hook.liftCount());
+    ok(moved2 === false, 'liftHost 已退役（对 React 节点返回 false，不再搬）');
+    ok(host0.parentNode === whereBefore, 'liftHost 不再移动宿主（节点归属永远在 React）');
+    ok(typeof hook.liftCount() === 'number', 'liftCount() 仍可安全调用（' + hook.liftCount() + '）');
   } catch (e) {
-    ok(false, '重复搬运不抛异常', e.message);
+    ok(false, 'liftHost 调用不抛异常', e.message);
   }
 
   // 全屏兜底：没有选择器 API 时必须安静退化（不能因为读不到就崩）
@@ -925,7 +925,7 @@ if (tree) {
     ok(evs.length > 0, '注册了 fullscreenchange 监听（全屏兜底）');
     evs.forEach((f) => f({}));
     ok(true, 'fullscreenchange 回调在"没有选择器 API"的假 DOM 里也不抛异常');
-    ok(host0.parentNode === topEl, '全屏事件过后宿主仍在顶层容器里');
+    ok(host0.parentNode === whereBefore, '全屏事件过后宿主位置不变（宿主由 React 管，插件不再搬）');
   } catch (e) {
     ok(false, 'fullscreenchange 回调不抛异常', e.message);
   }
